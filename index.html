@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <!-- viewport-fit=cover：iPhoneのノッチ部分まで画面を使い、safe-areaで余白を調整する -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>スモークログ</title>
+  <meta name="description" content="タバコの本数を記録して、グラフで振り返るアプリ">
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#16181d">
+
+  <!-- iPhone（Safari）のホーム画面追加用 -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="スモークログ">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+
+  <link rel="stylesheet" href="style.css">
+
+  <!-- グラフ用ライブラリ（Service Workerがキャッシュするのでオフラインでも動く） -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1 class="app-title">スモークログ</h1>
+      <span class="header-date" id="headerDate"></span>
+    </header>
+
+    <main class="app-main">
+      <!-- ===== ホーム ===== -->
+      <section class="view view-home is-active" id="view-home" aria-labelledby="tab-home">
+        <div class="today-card">
+          <p class="today-label">今日の本数</p>
+          <p class="today-count"><span id="todayCount">0</span><small>本</small></p>
+          <div class="goal-wrap" id="goalWrap">
+            <div class="goal-bar"><div class="goal-fill" id="goalFill"></div></div>
+            <p class="goal-text" id="goalText"></p>
+          </div>
+        </div>
+
+        <div class="mini-stats">
+          <div class="mini-stat">
+            <span class="mini-label">前回から</span>
+            <span class="mini-value" id="sinceLast">—</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-label">昨日の今ごろ</span>
+            <span class="mini-value" id="yesterdaySameTime">—</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-label">今日の金額</span>
+            <span class="mini-value" id="todayCost">—</span>
+          </div>
+        </div>
+
+        <!-- 銘柄のパッケージ（3Dでぐるぐる回る） -->
+        <div class="brand-stage">
+          <div class="pack-scene" id="packScene" title="タップで回転">
+            <div class="pack-tilt">
+              <div class="pack-boost" id="packBoost">
+                <div class="pack" id="pack">
+                  <div class="face front"><img class="pack-img" src="img/pack-menthol.svg" alt=""></div>
+                  <div class="face back"><img class="pack-img" src="img/pack-menthol.svg" alt=""></div>
+                  <div class="face right"></div>
+                  <div class="face left"></div>
+                  <div class="face top"></div>
+                  <div class="face bottom"></div>
+                </div>
+              </div>
+            </div>
+            <div class="pack-shadow" aria-hidden="true"></div>
+          </div>
+          <p class="brand-name" id="brandName">マルボロ・メンソール</p>
+          <p class="brand-sub" id="brandSub"></p>
+        </div>
+
+        <!-- 片手で押しやすいよう、画面の下半分に大きく配置 -->
+        <div class="plus-area">
+          <div class="plus-row">
+            <button type="button" class="minus-btn" id="minusBtn" aria-label="今日の最後の記録を1本減らす">
+              <span aria-hidden="true">−</span>
+            </button>
+            <button type="button" class="plus-btn" id="plusBtn" aria-label="1本記録する">
+              <span class="plus-icon" aria-hidden="true">＋</span>
+            </button>
+            <span aria-hidden="true"></span>
+          </div>
+          <p class="plus-hint">＋で1本記録 ／ −で1本減らす</p>
+        </div>
+      </section>
+
+      <!-- ===== 記録（グラフ） ===== -->
+      <section class="view view-stats" id="view-stats" aria-labelledby="tab-stats" hidden>
+        <div class="segmented" role="group" aria-label="表示期間">
+          <button type="button" class="seg-btn is-active" data-range="7">7日間</button>
+          <button type="button" class="seg-btn" data-range="30">30日間</button>
+        </div>
+
+        <div class="card chart-card">
+          <div class="chart-box">
+            <canvas id="chart" aria-label="1日ごとの本数のグラフ" role="img"></canvas>
+          </div>
+          <p class="chart-fallback" id="chartFallback" hidden>
+            グラフを読み込めませんでした。一度オンラインで開くと、次回からオフラインでも表示されます。
+          </p>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-label">合計</span><span class="stat-value" id="statTotal">—</span></div>
+          <div class="stat"><span class="stat-label">1日平均</span><span class="stat-value" id="statAvg">—</span></div>
+          <div class="stat"><span class="stat-label">目標達成</span><span class="stat-value" id="statGoal">—</span></div>
+          <div class="stat"><span class="stat-label">金額</span><span class="stat-value" id="statCost">—</span></div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">時刻を指定して追加</h2>
+          <form class="add-past" id="addPastForm">
+            <input type="datetime-local" id="pastTime" required aria-label="記録する日時">
+            <button type="submit" class="btn btn-primary">追加</button>
+          </form>
+        </div>
+
+        <h2 class="section-title">日ごとの記録</h2>
+        <ul class="day-list" id="dayList"></ul>
+        <p class="empty" id="emptyHistory" hidden>まだ記録がありません。ホームの「＋」で記録しましょう。</p>
+      </section>
+
+      <!-- ===== 設定 ===== -->
+      <section class="view view-settings" id="view-settings" aria-labelledby="tab-settings" hidden>
+        <div class="card">
+          <h2 class="card-title">銘柄</h2>
+          <label class="field">
+            <span>銘柄名</span>
+            <input type="text" id="setBrandName" maxlength="30" autocomplete="off">
+          </label>
+          <div class="field">
+            <span>パッケージ画像<small>自分の箱を撮影すると、その写真が回ります</small></span>
+            <img class="brand-thumb" id="brandThumb" src="img/pack-menthol.svg" alt="現在のパッケージ画像">
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn" id="brandImgBtn">写真を選ぶ</button>
+            <button type="button" class="btn" id="brandResetBtn">初期画像に戻す</button>
+          </div>
+          <input type="file" id="brandFile" accept="image/*" hidden>
+          <label class="field field-toggle field-gap">
+            <span>箱を回転させる</span>
+            <input type="checkbox" id="setSpin" class="toggle">
+          </label>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">目標と金額</h2>
+          <label class="field">
+            <span>1日の目標本数<small>（0で目標なし）</small></span>
+            <input type="number" id="setGoal" inputmode="numeric" min="0" max="100" step="1">
+          </label>
+          <label class="field">
+            <span>1箱の値段（円）</span>
+            <input type="number" id="setPackPrice" inputmode="numeric" min="0" max="10000" step="10">
+          </label>
+          <label class="field">
+            <span>1箱の本数</span>
+            <input type="number" id="setPerPack" inputmode="numeric" min="1" max="100" step="1">
+          </label>
+          <label class="field">
+            <span>1日の区切り時刻<small>（夜ふかしする人向け）</small></span>
+            <select id="setDayStart">
+              <option value="0">0:00</option>
+              <option value="1">1:00</option>
+              <option value="2">2:00</option>
+              <option value="3">3:00</option>
+              <option value="4">4:00</option>
+              <option value="5">5:00</option>
+              <option value="6">6:00</option>
+            </select>
+          </label>
+          <label class="field field-toggle">
+            <span>ボタンを押したときに振動する<small>（対応端末のみ）</small></span>
+            <input type="checkbox" id="setVibrate" class="toggle">
+          </label>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">データの保護</h2>
+          <p class="note">
+            記録はこの端末のブラウザ内に保存されています。機種変更やブラウザのデータ消去に備えて、ときどきバックアップしてください。
+          </p>
+          <p class="note" id="lastBackup"></p>
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="backupBtn">バックアップ（書き出し）</button>
+            <button type="button" class="btn" id="restoreBtn">復元（読み込み）</button>
+          </div>
+          <input type="file" id="restoreFile" accept="application/json,.json" hidden>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">その他</h2>
+          <p class="note" id="dataSummary"></p>
+          <button type="button" class="btn btn-danger" id="clearBtn">すべての記録を削除</button>
+        </div>
+
+        <p class="version">スモークログ v1.1.0</p>
+      </section>
+    </main>
+
+    <!-- 下部タブ -->
+    <nav class="tabbar" role="tablist" aria-label="画面切り替え">
+      <button type="button" class="tab is-active" id="tab-home" data-view="home" role="tab" aria-selected="true" aria-controls="view-home">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
+        <span>ホーム</span>
+      </button>
+      <button type="button" class="tab" id="tab-stats" data-view="stats" role="tab" aria-selected="false" aria-controls="view-stats">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+        <span>記録</span>
+      </button>
+      <button type="button" class="tab" id="tab-settings" data-view="settings" role="tab" aria-selected="false" aria-controls="view-settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        <span>設定</span>
+      </button>
+    </nav>
+
+    <!-- お知らせ（取り消しボタン付き） -->
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+      <span id="toastText"></span>
+      <button type="button" class="toast-action" id="toastAction" hidden>取り消す</button>
+    </div>
+  </div>
+</body>
+</html>
